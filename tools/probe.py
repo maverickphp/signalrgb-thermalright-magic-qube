@@ -1,8 +1,8 @@
-"""Send test frames to the Thermalright Magic Qube screen (VID 0416, PID 8001).
+﻿"""Send test frames to the Thermalright Magic Qube screen (VID 0416, PID 8001).
 
 Protocol from thermalright-trcc-linux doc/PROTOCOL_USBLED.md:
   data packet = 20-byte header (DA DB DC DD, cmd 0x02 at byte 12,
-  payload length LE16 at byte 16) + 65 x RGB, sent as 64-byte HID reports.
+  payload length LE16 at byte 16) + 66 x RGB, sent as 64-byte HID reports.
 
 Usage:
   probe.py handshake                  send the init packet and print the reply
@@ -20,7 +20,7 @@ import hid
 
 VID, PID = 0x0416, 0x8001
 MAGIC = bytes.fromhex("dadbdcdd")
-LED_COUNT = 65
+LED_COUNT = 66
 REPORT = 64            # data bytes per HID report; Windows needs report ID 0 in front
 
 
@@ -75,6 +75,17 @@ def main():
             a, b = int(args[1]), int(args[2])
             cols = [rgb(args[3]) if a <= i < b else off for i in range(LED_COUNT)]
             hold(dev, cols, float(args[4]) if len(args) > 4 else 10)
+        elif args[0] == "bands":
+            # LEDs from 65 up in groups of 5, each group a different color; main display off.
+            names = ["red", "green", "blue", "yellow", "cyan", "magenta", "white", "orange"]
+            band = ["660000", "006600", "000066", "666600", "006666", "660066", "666666", "662200"]
+            total = LED_COUNT + 5 * len(band)
+            cols = [off] * LED_COUNT
+            for i, c in enumerate(band):
+                print(f"LEDs {LED_COUNT + i * 5}-{LED_COUNT + i * 5 + 4}: {names[i]}")
+                cols += [rgb(c)] * 5
+            assert len(cols) == total
+            hold(dev, cols, float(args[1]) if len(args) > 1 else 60)
         elif args[0] == "walk":
             delay = float(args[1]) if len(args) > 1 else 0.7
             for i in range(LED_COUNT):

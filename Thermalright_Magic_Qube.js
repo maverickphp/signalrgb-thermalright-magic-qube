@@ -26,7 +26,7 @@ export function ControllableParameters() {
 // Protocol (from thermalright-trcc-linux, doc/PROTOCOL_USBLED.md):
 // 20-byte header DA DB DC DD .. cmd 0x02 at [12], payload length LE16 at [16],
 // then one RGB triplet per LED in wire order, sent as 64-byte HID reports.
-const LED_COUNT = 65;
+const LED_COUNT = 66;
 const REPORT_SIZE = 64;
 const MIN_FRAME_MS = 30; // the firmware needs ~30 ms between frames
 
@@ -87,6 +87,10 @@ function buildLayout() {
 		vLedNames.push(`Border ${i + 1}`);
 		vLedPositions.push(pos);
 	}
+
+	// LED 65: light strip on the side of the pump head (found by testing; not in the trcc-linux map).
+	vLedNames.push("Side Strip");
+	vLedPositions.push([15, 6]);
 }
 
 buildLayout();

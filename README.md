@@ -27,14 +27,14 @@ only covers the USB display (`VID 0416`, `PID 8001`, a WCH CH32x035 HID device).
 
 ## Protocol
 
-Each frame is a 20-byte header followed by 65 RGB triplets, sent as 64-byte HID output reports
+Each frame is a 20-byte header followed by 66 RGB triplets, sent as 64-byte HID output reports
 (Windows needs report ID `0x00` in front of each one):
 
 ```text
 offset 0-3   DA DB DC DD   magic
 offset 12    02            command: LED data
-offset 16-17 C3 00         payload length, little-endian (65 x 3 = 195)
-offset 20..  R G B x 65    colors in wire order
+offset 16-17 C6 00         payload length, little-endian (66 x 3 = 198)
+offset 20..  R G B x 66    colors in wire order
 ```
 
 No handshake is needed before sending colors.
@@ -47,6 +47,7 @@ LED wire order:
 | 21-41 | left digit, same order |
 | 42-49 | indicator pairs, clockwise from top-left: CPU temp, GPU temp, GPU load, CPU load |
 | 50-64 | border outline |
+| 65 | light strip on the side of the pump head (not in the trcc-linux map; found by testing) |
 
 The order of LEDs inside each segment and around the border is approximate, so smooth gradients
 may look slightly out of order on those parts.
