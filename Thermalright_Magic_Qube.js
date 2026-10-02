@@ -152,5 +152,6 @@ export function Validate(endpoint) {
 }
 
 export function ImageUrl() {
-	return "https://assets.signalrgb.com/devices/default/misc/usb-drive-render.png";
+	// Official product image, linked from Thermalright's site (not copied into this repo).
+	return "https://www.thermalright.com/wp-content/uploads/2026/08/magic-qube-360-argb-black-768x768.png";
 }
