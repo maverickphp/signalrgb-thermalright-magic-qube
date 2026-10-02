@@ -10,13 +10,9 @@ only covers the USB display (`VID 0416`, `PID 8001`, a WCH CH32x035 HID device).
 ## Install
 
 1. Quit Thermalright Control Center (`TRCC.exe`), including from the tray. It fights over the device.
-2. Add the plugin to SignalRGB in one of two ways:
-   - **As an addon (updates automatically):** in SignalRGB's Addons page, add
-     `https://github.com/maverickphp/signalrgb-thermalright-magic-qube`.
-   - **Manually:** copy `Thermalright_Magic_Qube.js` to
-     `%USERPROFILE%\Documents\WhirlwindFX\Plugins\Thermalright Magic Qube\`.
-
-   Use only one of these, or two copies of the plugin will claim the same device.
+2. In SignalRGB's Addons page, add this repo as an addon. It updates automatically when the repo
+   changes:
+   `https://github.com/maverickphp/signalrgb-thermalright-magic-qube`
 3. Fully restart SignalRGB (quit it from the tray icon). The display shows up under Devices as
    **Thermalright Magic Qube**.
 
