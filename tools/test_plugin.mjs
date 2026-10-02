@@ -1,55 +1,75 @@
-// Loads the plugin with a fake SignalRGB runtime and checks the UDP packets it sends the helper.
+// Loads the plugin with a fake SignalRGB runtime and checks the HID frames it writes.
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
-const sent = [];
-const controllers = new Map();
-// Like SignalRGB, `udp` only appears once the plugin asks for the feature.
+const writes = [];
 globalThis.device = {
-  setName() {}, setImageFromUrl() {}, setSize() {}, setControllableLeds() {},
+  setName() {}, log() {},
   color: () => [0, 0, 255],
-  addFeature(name) {
-    if (name === "udp") {
-      globalThis.udp = { send: (ip, port, data) => sent.push({ data, ip, port }) };
-    }
-  },
+  write: (data, len) => writes.push({ data, len }),
 };
-globalThis.service = {
-  log() {},
-  getController: id => controllers.get(id),
-  addController: c => controllers.set(c.id, c),
-  updateController() {},
-  announceController() {},
-};
-Object.assign(globalThis, { shutdownColor: "#000000", LightingMode: "Canvas", forcedColor: "#009bde", brightnessScale: 40 });
+Object.assign(globalThis, {
+  shutdownColor: "#000000", LightingMode: "Canvas", forcedColor: "#009bde", brightnessScale: 40,
+  showReadings: true, rotateSeconds: 3,
+});
 
 const src = readFileSync(new URL("../Thermalright_Magic_Qube.js", import.meta.url), "utf8");
-const plugin = await import("data:text/javascript," + encodeURIComponent(src));
+const load = async tag => import("data:text/javascript," + encodeURIComponent(src + `\n// ${tag}`));
 
-assert.equal(plugin.Type(), "network");
-const names = plugin.LedNames(), pos = plugin.LedPositions();
-assert.equal(names.length, 66); assert.equal(pos.length, 66);
-const [w, h] = plugin.Size();
-for (const [x, y] of pos) assert.ok(x >= 0 && x < w && y >= 0 && y < h, `out of canvas: ${x},${y}`);
-assert.equal(new Set(pos.map(String)).size, 66, "duplicate LED positions");
+function frameOf(plugin) {
+  writes.length = 0;
+  plugin.Render();
+  assert.equal(writes.length, 4, "expected 4 HID reports");
+  for (const w of writes) { assert.equal(w.data.length, 65); assert.equal(w.len, 65); assert.equal(w.data[0], 0); }
+  const frame = writes.flatMap(w => w.data.slice(1));
+  assert.deepEqual(frame.slice(0, 4), [0xda, 0xdb, 0xdc, 0xdd]);
+  assert.equal(frame[12], 2); assert.equal(frame[16] | frame[17] << 8, 198);
+  return frame;
+}
+const isLit = (frame, led) => frame[20 + led * 3 + 2] !== 0;
+const seg = s => [0, 1, 2].map(k => "cdegbaf".indexOf(s) * 3 + k);
 
-plugin.Initialize();
-plugin.Render();
-assert.equal(sent.length, 1, "one UDP packet per frame");
-const { data, ip, port } = sent[0];
-assert.equal(ip, "127.0.0.1"); assert.equal(port, 51866);
-assert.equal(data.length, 3 + 66 * 3);
-assert.deepEqual(data.slice(0, 3), [0x4d, 0x51, 0x01]);
-assert.deepEqual(data.slice(3, 6), [0, 0, 102]);            // 255 * 0.4
-assert.deepEqual(data.slice(3 + 65 * 3), [0, 0, 102]);
+// Layout.
+{
+  const plugin = await load("layout");
+  const names = plugin.LedNames(), pos = plugin.LedPositions();
+  assert.equal(names.length, 66); assert.equal(pos.length, 66);
+  const [w, h] = plugin.Size();
+  for (const [x, y] of pos) assert.ok(x >= 0 && x < w && y >= 0 && y < h, `out of canvas: ${x},${y}`);
+  assert.equal(new Set(pos.map(String)).size, 66, "duplicate LED positions");
+  assert.ok(plugin.Validate({ interface: -1, usage: 1, usage_page: 0xff00 }));
+}
 
-sent.length = 0; plugin.Render();
-assert.equal(sent.length, 0, "second Render within 30 ms should be throttled");
+// No sensor API: every LED shows the effect, like before.
+{
+  delete globalThis.engine;
+  const plugin = await load("no-sensors");
+  plugin.Initialize();
+  const frame = frameOf(plugin);
+  for (let i = 0; i < 66; i++) assert.ok(isLit(frame, i), `LED ${i} should be lit`);
+  assert.deepEqual(frame.slice(20, 23), [0, 0, 102]);  // 255 * 0.4
+}
 
-plugin.Shutdown(true);
-assert.deepEqual(sent.at(-1).data.slice(3, 6), [0, 0, 0]);
+// With sensors: CPU temperature 54 on the digits during the first rotation slot.
+{
+  globalThis.engine = { getSensorValue: name => ({ "CPU Temperature": { value: 54.4, min: 0, max: 100 } })[name] };
+  const realNow = Date.now;
+  Date.now = () => 3000 * 4 * 1000;  // start of a rotation cycle -> reading 0 (CPU temp)
+  const plugin = await load("sensors");
+  plugin.Initialize();
+  const frame = frameOf(plugin);
+  writes.length = 0; plugin.Render();
+  assert.equal(writes.length, 0, "second Render within 30 ms should be throttled");
+  Date.now = realNow;
 
-const discovery = new plugin.DiscoveryService();
-discovery.Initialize(); discovery.Update(); discovery.Update();
-assert.equal(controllers.size, 1, "discovery announces exactly one device");
+  const tens = new Set([..."acdfg"].flatMap(seg).map(i => i + 21));
+  const units = new Set([..."bcfg"].flatMap(seg));
+  for (let i = 0; i < 21; i++) assert.equal(isLit(frame, i), units.has(i), `units LED ${i}`);
+  for (let i = 21; i < 42; i++) assert.equal(isLit(frame, i), tens.has(i), `tens LED ${i}`);
+  for (let i = 42; i < 50; i++) assert.equal(isLit(frame, i), i === 42 || i === 43, `indicator LED ${i}`);
+  for (let i = 50; i < 66; i++) assert.ok(isLit(frame, i), `border/strip LED ${i}`);
+
+  writes.length = 0; plugin.Shutdown(true);
+  assert.deepEqual(writes.flatMap(w => w.data.slice(1)).slice(20, 23), [0, 0, 0]);
+}
 console.log("all plugin checks passed");
