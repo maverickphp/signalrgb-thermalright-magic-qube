@@ -10,7 +10,7 @@ globalThis.device = {
   color: () => [0, 0, 255],
   addFeature(name) {
     if (name === "udp") {
-      globalThis.udp = { createSocket: () => ({ write: (data, ip, port) => sent.push({ data, ip, port }) }) };
+      globalThis.udp = { send: (ip, port, data) => sent.push({ data, ip, port }) };
     }
   },
 };

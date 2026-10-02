@@ -100,7 +100,7 @@ buildLayout();
 export function LedNames() { return vLedNames; }
 export function LedPositions() { return vLedPositions; }
 
-let socket;
+let udpReady = false;
 let lastFrame = 0;
 
 export function Initialize() {
@@ -109,7 +109,7 @@ export function Initialize() {
 	device.setImageFromUrl(ImageUrl());
 	device.setSize(Size());
 	device.setControllableLeds(vLedNames, vLedPositions);
-	socket = udp.createSocket();
+	udpReady = true;
 }
 
 export function Render() {
@@ -126,7 +126,7 @@ export function Shutdown(SystemSuspending) {
 }
 
 function sendColors(overrideColor) {
-	if (!socket) {
+	if (!udpReady) {
 		return;
 	}
 	const scale = Math.min(100, Math.max(10, Number(brightnessScale) || 40)) / 100;
@@ -143,7 +143,7 @@ function sendColors(overrideColor) {
 			Math.floor(color[2] * scale),
 		);
 	}
-	socket.write(packet, HELPER_IP, HELPER_PORT);
+	udp.send(HELPER_IP, HELPER_PORT, packet);
 }
 
 function hexToRgb(hex) {

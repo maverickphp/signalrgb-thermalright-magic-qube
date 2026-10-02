@@ -1,4 +1,4 @@
-﻿"""Send test frames to the Thermalright Magic Qube screen (VID 0416, PID 8001).
+"""Send test frames to the Thermalright Magic Qube screen (VID 0416, PID 8001).
 
 Protocol from thermalright-trcc-linux doc/PROTOCOL_USBLED.md:
   data packet = 20-byte header (DA DB DC DD, cmd 0x02 at byte 12,
