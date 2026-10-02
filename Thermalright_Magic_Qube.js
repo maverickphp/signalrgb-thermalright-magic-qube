@@ -1,14 +1,15 @@
 export function Name() { return "Thermalright Magic Qube"; }
-export function VendorId() { return 0x0416; }
-export function ProductId() { return 0x8001; }
+export function Version() { return "2.0.0"; }
+export function Type() { return "network"; }
 export function Publisher() { return "Community"; }
 export function Size() { return [17, 13]; }
 export function DefaultPosition() { return [120, 80]; }
 export function DefaultScale() { return 6.0; }
-export function Type() { return "Hid"; }
 export function DeviceType() { return "aio"; }
 export function ConflictingProcesses() { return ["TRCC.exe"]; }
 /* global
+controller:readonly
+discovery:readonly
 shutdownColor:readonly
 LightingMode:readonly
 forcedColor:readonly
@@ -23,12 +24,13 @@ export function ControllableParameters() {
 	];
 }
 
-// Protocol (from thermalright-trcc-linux, doc/PROTOCOL_USBLED.md):
-// 20-byte header DA DB DC DD .. cmd 0x02 at [12], payload length LE16 at [16],
-// then one RGB triplet per LED in wire order, sent as 64-byte HID reports.
+// The display is driven by helper/magic_qube_helper.py, which adds live CPU/GPU readings to the
+// digits. This plugin streams the effect colors for all 66 LEDs to it over UDP on this PC only:
+// "MQ" 0x01, then 66 x RGB in wire order.
+const HELPER_IP = "127.0.0.1";
+const HELPER_PORT = 51866;
 const LED_COUNT = 66;
-const REPORT_SIZE = 64;
-const MIN_FRAME_MS = 30; // the firmware needs ~30 ms between frames
+const MIN_FRAME_MS = 30;
 
 // Wire order of the 7 segments inside one digit, 3 LEDs per segment.
 const SEGMENT_WIRE_ORDER = ["c", "d", "e", "g", "b", "a", "f"];
@@ -98,10 +100,15 @@ buildLayout();
 export function LedNames() { return vLedNames; }
 export function LedPositions() { return vLedPositions; }
 
+let socket;
 let lastFrame = 0;
 
 export function Initialize() {
 	device.setName("Thermalright Magic Qube");
+	device.setImageFromUrl(ImageUrl());
+	device.setSize(Size());
+	device.setControllableLeds(vLedNames, vLedPositions);
+	socket = udp.createSocket();
 }
 
 export function Render() {
@@ -118,31 +125,24 @@ export function Shutdown(SystemSuspending) {
 }
 
 function sendColors(overrideColor) {
+	if (!socket) {
+		return;
+	}
 	const scale = Math.min(100, Math.max(10, Number(brightnessScale) || 40)) / 100;
 	const fixed = overrideColor ? hexToRgb(overrideColor)
 		: LightingMode === "Forced" ? hexToRgb(forcedColor) : null;
 
-	const frame = new Array(20).fill(0);
-	frame[0] = 0xDA; frame[1] = 0xDB; frame[2] = 0xDC; frame[3] = 0xDD;
-	frame[12] = 0x02;
-	frame[16] = (LED_COUNT * 3) & 0xFF;
-	frame[17] = (LED_COUNT * 3) >> 8;
-
+	const packet = [0x4D, 0x51, 0x01]; // "MQ", version 1
 	for (let i = 0; i < LED_COUNT; i++) {
 		const [x, y] = vLedPositions[i];
 		const color = fixed || device.color(x, y);
-		frame.push(
+		packet.push(
 			Math.floor(color[0] * scale),
 			Math.floor(color[1] * scale),
 			Math.floor(color[2] * scale),
 		);
 	}
-
-	for (let offset = 0; offset < frame.length; offset += REPORT_SIZE) {
-		const chunk = frame.slice(offset, offset + REPORT_SIZE);
-		while (chunk.length < REPORT_SIZE) { chunk.push(0); }
-		device.write([0x00, ...chunk], REPORT_SIZE + 1); // report ID 0 + 64 data bytes
-	}
+	socket.write(packet, HELPER_IP, HELPER_PORT);
 }
 
 function hexToRgb(hex) {
@@ -150,12 +150,38 @@ function hexToRgb(hex) {
 	return [parseInt(result[1], 16), parseInt(result[2], 16), parseInt(result[3], 16)];
 }
 
-export function Validate(endpoint) {
-	// Single-interface device: SignalRGB reports interface -1, so match on the vendor usage page only.
-	return endpoint.usage_page === 0xFF00 && endpoint.usage === 0x0001;
-}
-
 export function ImageUrl() {
 	// Official product image, linked from Thermalright's site (not copied into this repo).
 	return "https://www.thermalright.com/wp-content/uploads/2026/08/magic-qube-360-argb-black-768x768.png";
+}
+
+// The helper always lives on this PC, so discovery just announces one fixed device.
+export function DiscoveryService() {
+	this.IconUrl = ImageUrl();
+
+	this.Initialize = function() {
+		service.log("Thermalright Magic Qube: announcing local helper device");
+	};
+
+	this.Update = function() {
+		if (service.getController("magic-qube-helper") === undefined) {
+			const qube = new MagicQubeController();
+			service.addController(qube);
+			service.updateController(qube);
+			service.announceController(qube);
+		}
+	};
+
+	this.Discovered = function() {};
+}
+
+class MagicQubeController {
+	constructor() {
+		this.id = "magic-qube-helper";
+		this.name = "Thermalright Magic Qube";
+		this.ip = HELPER_IP;
+		this.port = HELPER_PORT;
+	}
+
+	update() {}
 }
