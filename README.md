@@ -55,13 +55,6 @@ In SignalRGB: Devices → Thermalright Magic Qube → Lighting.
 | Forced Color | Color for `Forced` mode |
 | Shutdown Color | Color sent when SignalRGB or Windows shuts down |
 | Hardware Brightness (%) | Thermalright's own app runs the LEDs at 40%; this matches it by default |
-| LCD Face Sensor / Text Color (Pro) | See below |
-
-**SignalRGB Pro users** may not need the helper: the plugin also registers an LCD for the device,
-and can read the number SignalRGB's built-in **Simple Sensor** face draws on it. Pick that face in
-the device's LCD tab, set its text color to the plugin's *LCD Face Text Color* (default
-`#00ff00`), and pick the matching *LCD Face Sensor*. This is untested, since sensors and face
-selection are Pro features.
 
 ## How it works
 
@@ -103,17 +96,7 @@ No handshake is needed before sending colors.
 ## Development
 
 - `tools/test_plugin.mjs`: runs the plugin against a fake SignalRGB runtime and checks the HID
-  frames it sends.
-- `tools/test_decoder.mjs`: checks the LCD-face number reader against frames from
-  `tools/make_face_frames.py`.
-
-  ```powershell
-  python tools/make_face_frames.py build/frames
-  node tools/test_plugin.mjs build/frames
-  node tools/test_decoder.mjs build/frames
-  ```
-
-- `tools/make_digit_templates.py`: regenerates the bold Arial digit templates the reader uses.
+  frames it sends (`node tools/test_plugin.mjs`).
 - `tools/probe.py`: sends test frames straight to the display, e.g. `python tools/probe.py walk`
   lights the LEDs one at a time (quit SignalRGB first). `hid_caps.py` prints the HID report sizes,
   `sensors_test.py` lists the sensors LibreHardwareMonitorLib finds.
