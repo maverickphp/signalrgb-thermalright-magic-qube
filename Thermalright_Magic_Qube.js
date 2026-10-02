@@ -1,4 +1,5 @@
 import LCD from "@SignalRGB/lcd";
+import udpModule from "@SignalRGB/udp";
 export function Name() { return "Thermalright Magic Qube"; }
 export function VendorId() { return 0x0416; }
 export function ProductId() { return 0x8001; }
@@ -17,12 +18,14 @@ brightnessScale:readonly
 showReadings:readonly
 faceSensor:readonly
 faceTextColor:readonly
+rotateSeconds:readonly
 */
 export function ControllableParameters() {
 	return [
-		{property:"showReadings", group:"display", label:"Show Sensor Reading", description:"Spell the number shown by the LCD tab's 'Simple Sensor' face on the digits. Off, or without that face, the effect shows on every LED.", type:"boolean", default:"true"},
-		{property:"faceSensor", group:"display", label:"Sensor Label", description:"Which corner label to light. Match it to the sensor picked in the LCD tab.", type:"combobox", values:["CPU Temperature", "GPU Temperature", "GPU Load", "CPU Load"], default:"CPU Temperature"},
-		{property:"faceTextColor", group:"display", label:"Face Text Color", description:"Must match the Simple Sensor face's Text Color, and differ from your effect's colors.", min:"0", max:"360", type:"color", default:"#00ff00"},
+		{property:"showReadings", group:"display", label:"Show CPU/GPU Readings", description:"With the optional Magic Qube helper installed, the digits show CPU/GPU temperature and load. Off, or without a reading, the effect shows on every LED.", type:"boolean", default:"true"},
+		{property:"rotateSeconds", group:"display", label:"Seconds Per Reading", description:"How long each helper reading stays on before the next one.", step:"1", type:"number", min:"1", max:"30", default:"3"},
+		{property:"faceSensor", group:"display", label:"LCD Face Sensor (Pro)", description:"SignalRGB Pro only: which corner label to light for the number read off the LCD tab's Simple Sensor face.", type:"combobox", values:["CPU Temperature", "GPU Temperature", "GPU Load", "CPU Load"], default:"CPU Temperature"},
+		{property:"faceTextColor", group:"display", label:"LCD Face Text Color (Pro)", description:"SignalRGB Pro only: must match the Simple Sensor face's Text Color, and differ from your effect's colors.", min:"0", max:"360", type:"color", default:"#00ff00"},
 		{property:"shutdownColor", group:"lighting", label:"Shutdown Color", description:"Color applied when SignalRGB or the system shuts down", min:"0", max:"360", type:"color", default:"#000000"},
 		{property:"LightingMode", group:"lighting", label:"Lighting Mode", description:"Canvas follows the active effect, Forced uses one color", type:"combobox", values:["Canvas", "Forced"], default:"Canvas"},
 		{property:"forcedColor", group:"lighting", label:"Forced Color", description:"Color used in Forced mode", min:"0", max:"360", type:"color", default:"#009bde"},
@@ -245,6 +248,65 @@ function updateFaceValue(now) {
 	}
 }
 
+// ---- Readings from the optional helper --------------------------------------------------------
+// helper/magic_qube_helper.py reads CPU/GPU sensors (which free SignalRGB keeps from plugins) and
+// sends them once a second as JSON over UDP to this PC only, e.g.
+// {"cpu_temp": 63.0, "gpu_temp": 45.0, "gpu_load": 23.0, "cpu_load": 12.5}.
+
+const HELPER_PORT = 51867;
+const HELPER_TIMEOUT_MS = 5000;  // fall back once the helper has been quiet this long
+const HELPER_ROTATION = [
+	["cpu_temp", "CPU Temperature"],
+	["gpu_temp", "GPU Temperature"],
+	["gpu_load", "GPU Load"],
+	["cpu_load", "CPU Load"],
+];
+
+let helperValues = null;
+let helperValuesAt = 0;
+let helperSocket = null;
+
+function onHelperMessage(msg) {
+	try {
+		let text = msg && msg.data !== undefined ? msg.data : msg;
+		if (Array.isArray(text)) { text = String.fromCharCode(...text); }
+		const values = JSON.parse(String(text));
+		if (values && typeof values === "object") {
+			helperValues = values;
+			helperValuesAt = Date.now();
+		}
+	} catch (e) {
+		// not one of ours
+	}
+}
+
+function startHelperListener() {
+	try {
+		helperSocket = udpModule.createSocket();
+		helperSocket.on("message", onHelperMessage);
+		helperSocket.on("error", e => device.log(`Helper socket error: ${e}`));
+		helperSocket.bind(HELPER_PORT);
+		device.log(`Listening for the Magic Qube helper on UDP ${HELPER_PORT}`);
+	} catch (e) {
+		helperSocket = null;
+		device.log(`Can't listen for the helper: ${e}`);
+	}
+}
+
+// The helper reading to show now, rotating through those it sends: {value, label} or null.
+function helperReading(now) {
+	if (!helperValues || now - helperValuesAt > HELPER_TIMEOUT_MS) {
+		return null;
+	}
+	const available = HELPER_ROTATION.filter(([key]) => typeof helperValues[key] === "number");
+	if (!available.length) {
+		return null;
+	}
+	const period = Math.max(1, Number(rotateSeconds) || 3) * 1000;
+	const [key, label] = available[Math.floor(now / period) % available.length];
+	return { value: helperValues[key], label };
+}
+
 function digitLeds(ch, base, lit) {
 	for (const seg of DIGIT_SEGMENTS[ch] || "") {
 		const start = base + SEGMENT_WIRE_ORDER.indexOf(seg) * 3;
@@ -252,16 +314,29 @@ function digitLeds(ch, base, lit) {
 	}
 }
 
-// Which LEDs are on: the value's digits and its corner label, plus border and strip.
-// Returns null (every LED lit) when readings are off or no value has been read recently.
+// The reading to show: the helper's if it's running, else a number read off the LCD face.
+function currentReading(now) {
+	const fromHelper = helperReading(now);
+	if (fromHelper) {
+		return fromHelper;
+	}
+	if (faceValue !== null && now - faceValueAt <= VALUE_TIMEOUT_MS) {
+		return { value: faceValue, label: faceSensor };
+	}
+	return null;
+}
+
+// Which LEDs are on: the reading's digits and its corner label, plus border and strip.
+// Returns null (every LED lit) when readings are off or there is nothing to show.
 function litMask(now) {
-	if (String(showReadings) === "false" || faceValue === null || now - faceValueAt > VALUE_TIMEOUT_MS) {
+	const reading = String(showReadings) === "false" ? null : currentReading(now);
+	if (!reading) {
 		return null;
 	}
 	const lit = new Array(LED_COUNT).fill(false);
 	for (const i of ALWAYS_LIT) { lit[i] = true; }
-	for (const i of INDICATORS[faceSensor] || INDICATORS["CPU Temperature"]) { lit[i] = true; }
-	const text = String(Math.min(99, Math.max(0, Math.round(faceValue)))).padStart(2, " ");
+	for (const i of INDICATORS[reading.label] || INDICATORS["CPU Temperature"]) { lit[i] = true; }
+	const text = String(Math.min(99, Math.max(0, Math.round(reading.value)))).padStart(2, " ");
 	digitLeds(text[0], TENS_BASE, lit);
 	digitLeds(text[1], UNITS_BASE, lit);
 	return lit;
@@ -273,6 +348,7 @@ let lastFrame = 0;
 
 export function Initialize() {
 	device.setName("Thermalright Magic Qube");
+	startHelperListener();
 	try {
 		LCD.initialize({ width: LCD_SIZE, height: LCD_SIZE });
 	} catch (e) {

@@ -6,7 +6,8 @@ import { join } from "node:path";
 globalThis.LCD = { initialize() {}, getFrame() { return null; } };
 globalThis.device = { setName() {}, log() {}, color: () => [0, 0, 0], write() {} };
 const src = readFileSync(new URL("../Thermalright_Magic_Qube.js", import.meta.url), "utf8")
-  .replace('import LCD from "@SignalRGB/lcd";', "const LCD = globalThis.LCD;");
+  .replace('import LCD from "@SignalRGB/lcd";', "const LCD = globalThis.LCD;")
+  .replace('import udpModule from "@SignalRGB/udp";', "const udpModule = globalThis.udpModule;");
 const { decodeValue } = await import("data:text/javascript," + encodeURIComponent(src));
 
 const dir = process.argv[2] || "build/frames";
