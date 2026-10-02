@@ -4,11 +4,16 @@ import assert from "node:assert/strict";
 
 const sent = [];
 const controllers = new Map();
+// Like SignalRGB, `udp` only appears once the plugin asks for the feature.
 globalThis.device = {
   setName() {}, setImageFromUrl() {}, setSize() {}, setControllableLeds() {},
   color: () => [0, 0, 255],
+  addFeature(name) {
+    if (name === "udp") {
+      globalThis.udp = { createSocket: () => ({ write: (data, ip, port) => sent.push({ data, ip, port }) }) };
+    }
+  },
 };
-globalThis.udp = { createSocket: () => ({ write: (data, ip, port) => sent.push({ data, ip, port }) }) };
 globalThis.service = {
   log() {},
   getController: id => controllers.get(id),

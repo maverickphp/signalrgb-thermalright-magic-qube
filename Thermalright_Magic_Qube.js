@@ -104,6 +104,7 @@ let socket;
 let lastFrame = 0;
 
 export function Initialize() {
+	device.addFeature("udp"); // the udp global only exists after this
 	device.setName("Thermalright Magic Qube");
 	device.setImageFromUrl(ImageUrl());
 	device.setSize(Size());
