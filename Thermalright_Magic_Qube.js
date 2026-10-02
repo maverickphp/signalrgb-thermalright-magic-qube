@@ -15,12 +15,14 @@ LightingMode:readonly
 forcedColor:readonly
 brightnessScale:readonly
 showReadings:readonly
-rotateSeconds:readonly
+faceSensor:readonly
+faceTextColor:readonly
 */
 export function ControllableParameters() {
 	return [
-		{property:"showReadings", group:"display", label:"Show CPU/GPU Readings", description:"Spell the current temperature or load on the digits, rotating like Thermalright's software. Off shows the effect on every LED.", type:"boolean", default:"true"},
-		{property:"rotateSeconds", group:"display", label:"Seconds Per Reading", step:"1", type:"number", min:"1", max:"30", default:"3"},
+		{property:"showReadings", group:"display", label:"Show Sensor Reading", description:"Spell the number shown by the LCD tab's 'Simple Sensor' face on the digits. Off, or without that face, the effect shows on every LED.", type:"boolean", default:"true"},
+		{property:"faceSensor", group:"display", label:"Sensor Label", description:"Which corner label to light. Match it to the sensor picked in the LCD tab.", type:"combobox", values:["CPU Temperature", "GPU Temperature", "GPU Load", "CPU Load"], default:"CPU Temperature"},
+		{property:"faceTextColor", group:"display", label:"Face Text Color", description:"Must match the Simple Sensor face's Text Color, and differ from your effect's colors.", min:"0", max:"360", type:"color", default:"#00ff00"},
 		{property:"shutdownColor", group:"lighting", label:"Shutdown Color", description:"Color applied when SignalRGB or the system shuts down", min:"0", max:"360", type:"color", default:"#000000"},
 		{property:"LightingMode", group:"lighting", label:"Lighting Mode", description:"Canvas follows the active effect, Forced uses one color", type:"combobox", values:["Canvas", "Forced"], default:"Canvas"},
 		{property:"forcedColor", group:"lighting", label:"Forced Color", description:"Color used in Forced mode", min:"0", max:"360", type:"color", default:"#009bde"},
@@ -44,14 +46,13 @@ const DIGIT_SEGMENTS = {
 	"5": "acdfg", "6": "acdefg", "7": "abc", "8": "abcdefg", "9": "abcdfg",
 };
 
-// The four readings, in Thermalright's rotation order, with the indicator LEDs that label them
-// and the SignalRGB sensor names to try (as shown on SignalRGB's Monitoring page).
-const READINGS = [
-	{ leds: [42, 43], sensors: ["CPU Temperature", "CPU Package", "CPU Package Temperature"] },
-	{ leds: [44, 45], sensors: ["GPU Core Temperature", "GPU Temperature", "GPU Core"] },
-	{ leds: [46, 47], sensors: ["GPU Load", "GPU Core Load"] },
-	{ leds: [48, 49], sensors: ["CPU Load", "CPU Total"] },
-];
+// Corner label LED pairs, clockwise from top-left.
+const INDICATORS = {
+	"CPU Temperature": [42, 43],
+	"GPU Temperature": [44, 45],
+	"GPU Load": [46, 47],
+	"CPU Load": [48, 49],
+};
 const ALWAYS_LIT = Array.from({ length: 16 }, (_, i) => 50 + i); // border outline + side strip
 
 // Segment LED positions for a 5x9 digit cell, relative to its top-left corner.
@@ -119,48 +120,129 @@ buildLayout();
 export function LedNames() { return vLedNames; }
 export function LedPositions() { return vLedPositions; }
 
-// ---- Sensor readings from SignalRGB ----------------------------------------------------------
-// Effects read sensors with engine.getSensorValue(name) -> {value, min, max}. Plugins aren't
-// documented to have it, so look for it and fall back to effect-only lighting without it.
+// ---- Reading the sensor value off an LCD face ------------------------------------------------
+// Device plugins can't read sensors, but LCD faces can. The plugin registers a small LCD, the
+// user picks SignalRGB's built-in "Simple Sensor" face for it, and the plugin reads the number
+// that face draws: text pixels are found by the face's text color, the tallest line of text is
+// the value, and each digit in it is matched against bold Arial templates.
 
-function findSensorReader() {
-	const candidates = [
-		["engine.getSensorValue", () => typeof engine !== "undefined" && engine.getSensorValue],
-		["device.getSensorValue", () => device.getSensorValue],
-	];
-	for (const [label, get] of candidates) {
-		let fn;
-		try { fn = get(); } catch (e) { fn = undefined; }
-		if (typeof fn === "function") {
-			device.log(`Sensor API found: ${label}`);
-			return label.startsWith("engine") ? name => engine.getSensorValue(name) : name => device.getSensorValue(name);
-		}
+const LCD_SIZE = 240;
+const DECODE_INTERVAL_MS = 500;
+const VALUE_TIMEOUT_MS = 10000;  // stop showing a value this long after it was last read
+
+// Ink coverage (0-9) on a 6x9 grid per digit, from tools/make_digit_templates.py.
+const GRID_W = 6, GRID_H = 9;
+const DIGIT_TEMPLATES = {
+	"0": { aspect: 0.65, cells: "048950397694791097890088980079890089791097496594059960" },
+	"1": { aspect: 0.46, cells: "000499016999699899762599000599000599000599000599000599" },
+	"2": { aspect: 0.68, cells: "058971496597580069000087000693017940079300498666899999" },
+	"3": { aspect: 0.67, cells: "069950596694340195002782005882000087560079595596069961" },
+	"4": { aspect: 0.74, cells: "000680003980008980058680292680773782999998222682000680" },
+	"5": { aspect: 0.69, cells: "089995197663393100499971695596000078670088596695059950" },
+	"6": { aspect: 0.67, cells: "048971397595691043884640998895891078790068496496058961" },
+	"7": { aspect: 0.67, cells: "999998777797000581002940006800019500049200059000068000" },
+	"8": { aspect: 0.66, cells: "169960595594780095396692289981781187970078794496169961" },
+	"9": { aspect: 0.67, cells: "169850695793970097970098597898057588230097695694179840" },
+};
+
+function textMask(frame, key) {
+	const mask = new Uint8Array(LCD_SIZE * LCD_SIZE);
+	for (let p = 0, i = 0; p < mask.length; p++, i += 3) {
+		const d = Math.abs(frame[i] - key[0]) + Math.abs(frame[i + 1] - key[1]) + Math.abs(frame[i + 2] - key[2]);
+		mask[p] = d < 120 ? 1 : 0;
 	}
-	device.log("No sensor API available to this plugin; showing the effect only.");
-	return null;
+	return mask;
 }
 
-let readSensor = null;
-const resolvedNames = READINGS.map(() => null);
+// Runs of indices whose count is non-zero, bridging gaps up to maxGap.
+function runs(counts, maxGap) {
+	const out = [];
+	let start = -1, last = -1;
+	counts.forEach((c, i) => {
+		if (!c) { return; }
+		if (start >= 0 && i - last > maxGap + 1) { out.push([start, last]); start = -1; }
+		if (start < 0) { start = i; }
+		last = i;
+	});
+	if (start >= 0) { out.push([start, last]); }
+	return out;
+}
 
-function readValue(index) {
-	if (!readSensor) {
-		return null;
-	}
-	const names = resolvedNames[index] ? [resolvedNames[index]] : READINGS[index].sensors;
-	for (const name of names) {
-		let info;
-		try { info = readSensor(name); } catch (e) { info = undefined; }
-		const value = info && typeof info === "object" ? info.value : info;
-		if (typeof value === "number" && isFinite(value)) {
-			if (!resolvedNames[index]) {
-				resolvedNames[index] = name;
-				device.log(`Reading ${index}: using sensor "${name}" = ${value}`);
+function classifyDigit(mask, x0, x1, y0, y1) {
+	const w = x1 - x0 + 1, h = y1 - y0 + 1;
+	const aspect = w / h;
+	const cells = [];
+	for (let gy = 0; gy < GRID_H; gy++) {
+		for (let gx = 0; gx < GRID_W; gx++) {
+			let on = 0, n = 0;
+			const ya = y0 + Math.floor(gy * h / GRID_H), yb = y0 + Math.floor((gy + 1) * h / GRID_H);
+			const xa = x0 + Math.floor(gx * w / GRID_W), xb = x0 + Math.floor((gx + 1) * w / GRID_W);
+			for (let y = ya; y < Math.max(yb, ya + 1); y++) {
+				for (let x = xa; x < Math.max(xb, xa + 1); x++) { n++; on += mask[y * LCD_SIZE + x]; }
 			}
-			return value;
+			cells.push(Math.round(9 * on / n));
 		}
 	}
-	return null;
+	let best = null, bestScore = Infinity;
+	for (const [digit, t] of Object.entries(DIGIT_TEMPLATES)) {
+		let score = Math.abs(aspect - t.aspect) * 60;
+		for (let k = 0; k < cells.length; k++) { score += Math.abs(cells[k] - Number(t.cells[k])); }
+		if (score < bestScore) { bestScore = score; best = digit; }
+	}
+	return best;
+}
+
+// The number drawn on the frame, or null if no readable number is there.
+export function decodeValue(frame, key) {
+	const mask = textMask(frame, key);
+	const rowCounts = new Array(LCD_SIZE).fill(0);
+	for (let y = 0; y < LCD_SIZE; y++) {
+		for (let x = 0; x < LCD_SIZE; x++) { rowCounts[y] += mask[y * LCD_SIZE + x]; }
+	}
+	// The value is the tallest line of text; the label and unit lines are much smaller.
+	const lines = runs(rowCounts, 1).filter(([a, b]) => b - a >= 30);
+	if (!lines.length) { return null; }
+	const [ly0, ly1] = lines.reduce((m, r) => (r[1] - r[0] > m[1] - m[0] ? r : m));
+
+	const colCounts = new Array(LCD_SIZE).fill(0);
+	for (let y = ly0; y <= ly1; y++) {
+		for (let x = 0; x < LCD_SIZE; x++) { colCounts[x] += mask[y * LCD_SIZE + x]; }
+	}
+	const glyphs = runs(colCounts, 1).filter(([a, b]) => b - a >= 3);
+	if (!glyphs.length || glyphs.length > 3) { return null; }
+
+	let text = "";
+	for (const [gx0, gx1] of glyphs) {
+		let gy0 = ly1, gy1 = ly0;  // tighten to this glyph's own ink rows
+		for (let y = ly0; y <= ly1; y++) {
+			for (let x = gx0; x <= gx1; x++) {
+				if (mask[y * LCD_SIZE + x]) { gy0 = Math.min(gy0, y); gy1 = Math.max(gy1, y); break; }
+			}
+		}
+		text += classifyDigit(mask, gx0, gx1, gy0, gy1);
+	}
+	return Number(text);
+}
+
+let lastDecode = 0;
+let faceValue = null;
+let faceValueAt = 0;
+
+function updateFaceValue(now) {
+	if (now - lastDecode < DECODE_INTERVAL_MS) {
+		return;
+	}
+	lastDecode = now;
+	let frame = null;
+	try { frame = LCD.getFrame({ format: "RGB" }); } catch (e) { frame = null; }
+	if (!frame || frame.length !== LCD_SIZE * LCD_SIZE * 3) {
+		return;
+	}
+	const value = decodeValue(frame, hexToRgb(faceTextColor || "#00ff00"));
+	if (value !== null) {
+		faceValue = value;
+		faceValueAt = now;
+	}
 }
 
 function digitLeds(ch, base, lit) {
@@ -170,53 +252,19 @@ function digitLeds(ch, base, lit) {
 	}
 }
 
-// Which LEDs are on: the current reading's digits and indicator, plus border and strip.
-// Returns null (every LED lit) when readings are off or no sensor could be read.
+// Which LEDs are on: the value's digits and its corner label, plus border and strip.
+// Returns null (every LED lit) when readings are off or no value has been read recently.
 function litMask(now) {
-	if (String(showReadings) === "false" || !readSensor) {
-		return null;
-	}
-	const period = Math.max(1, Number(rotateSeconds) || 3) * 1000;
-	const index = Math.floor(now / period) % READINGS.length;
-	const value = readValue(index);
-	if (value === null) {
+	if (String(showReadings) === "false" || faceValue === null || now - faceValueAt > VALUE_TIMEOUT_MS) {
 		return null;
 	}
 	const lit = new Array(LED_COUNT).fill(false);
 	for (const i of ALWAYS_LIT) { lit[i] = true; }
-	for (const i of READINGS[index].leds) { lit[i] = true; }
-	const text = String(Math.min(99, Math.max(0, Math.round(value)))).padStart(2, " ");
+	for (const i of INDICATORS[faceSensor] || INDICATORS["CPU Temperature"]) { lit[i] = true; }
+	const text = String(Math.min(99, Math.max(0, Math.round(faceValue)))).padStart(2, " ");
 	digitLeds(text[0], TENS_BASE, lit);
 	digitLeds(text[1], UNITS_BASE, lit);
 	return lit;
-}
-
-// ---- LCD face (test) -------------------------------------------------------------------------
-// SignalRGB renders an LCD face (e.g. the built-in "Simple Sensor") over the effect into a
-// frame we can read. Test: color each LED from the matching spot of that frame.
-const LCD_SIZE = 240;
-let lcdFrame = null;
-let lastFrameGrab = 0;
-
-function grabLcdFrame(now) {
-	if (now - lastFrameGrab < 250) {
-		return;
-	}
-	lastFrameGrab = now;
-	try {
-		const frame = LCD.getFrame({ format: "RGB" });
-		lcdFrame = frame && frame.length === LCD_SIZE * LCD_SIZE * 3 ? frame : null;
-	} catch (e) {
-		lcdFrame = null;
-	}
-}
-
-function lcdColor(x, y) {
-	const [w, h] = Size();
-	const px = Math.min(LCD_SIZE - 1, Math.floor((x + 0.5) / w * LCD_SIZE));
-	const py = Math.min(LCD_SIZE - 1, Math.floor((y + 0.5) / h * LCD_SIZE));
-	const i = (py * LCD_SIZE + px) * 3;
-	return [lcdFrame[i], lcdFrame[i + 1], lcdFrame[i + 2]];
 }
 
 // ---- Device -----------------------------------------------------------------------------------
@@ -225,7 +273,6 @@ let lastFrame = 0;
 
 export function Initialize() {
 	device.setName("Thermalright Magic Qube");
-	readSensor = findSensorReader();
 	try {
 		LCD.initialize({ width: LCD_SIZE, height: LCD_SIZE });
 	} catch (e) {
@@ -239,7 +286,7 @@ export function Render() {
 		return;
 	}
 	lastFrame = now;
-	grabLcdFrame(now);
+	updateFaceValue(now);
 	sendColors(null, litMask(now));
 }
 
@@ -264,7 +311,7 @@ function sendColors(overrideColor, lit) {
 			continue;
 		}
 		const [x, y] = vLedPositions[i];
-		const color = fixed || (lcdFrame ? lcdColor(x, y) : device.color(x, y));
+		const color = fixed || device.color(x, y);
 		frame.push(
 			Math.floor(color[0] * scale),
 			Math.floor(color[1] * scale),

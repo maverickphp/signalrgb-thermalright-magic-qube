@@ -1,7 +1,11 @@
 // Loads the plugin with a fake SignalRGB runtime and checks the HID frames it writes.
+// Needs face frames from make_face_frames.py:
+//   python tools/make_face_frames.py build/frames && node tools/test_plugin.mjs build/frames
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 
+const framesDir = process.argv[2] || "build/frames";
 const writes = [];
 globalThis.device = {
   setName() {}, log() {},
@@ -10,11 +14,12 @@ globalThis.device = {
 };
 Object.assign(globalThis, {
   shutdownColor: "#000000", LightingMode: "Canvas", forcedColor: "#009bde", brightnessScale: 40,
-  showReadings: true, rotateSeconds: 3,
+  showReadings: true, faceSensor: "CPU Temperature", faceTextColor: "#00ff00",
 });
 
-// The real @SignalRGB/lcd module only exists inside SignalRGB; stand in a frameless one.
-globalThis.LCD = { initialize() {}, getFrame() { return null; } };
+// The real @SignalRGB/lcd module only exists inside SignalRGB; this one serves a chosen frame.
+let lcdFrame = null;
+globalThis.LCD = { initialize() {}, getFrame: () => lcdFrame };
 const src = readFileSync(new URL("../Thermalright_Magic_Qube.js", import.meta.url), "utf8")
   .replace('import LCD from "@SignalRGB/lcd";', "const LCD = globalThis.LCD;");
 const load = async tag => import("data:text/javascript," + encodeURIComponent(src + `\n// ${tag}`));
@@ -43,27 +48,24 @@ const seg = s => [0, 1, 2].map(k => "cdegbaf".indexOf(s) * 3 + k);
   assert.ok(plugin.Validate({ interface: -1, usage: 1, usage_page: 0xff00 }));
 }
 
-// No sensor API: every LED shows the effect, like before.
+// No face frame yet: every LED shows the effect.
 {
-  delete globalThis.engine;
-  const plugin = await load("no-sensors");
+  lcdFrame = null;
+  const plugin = await load("no-face");
   plugin.Initialize();
   const frame = frameOf(plugin);
   for (let i = 0; i < 66; i++) assert.ok(isLit(frame, i), `LED ${i} should be lit`);
   assert.deepEqual(frame.slice(20, 23), [0, 0, 102]);  // 255 * 0.4
 }
 
-// With sensors: CPU temperature 54 on the digits during the first rotation slot.
+// Simple Sensor face showing 54: digits spell 54, the CPU temperature label is lit.
 {
-  globalThis.engine = { getSensorValue: name => ({ "CPU Temperature": { value: 54.4, min: 0, max: 100 } })[name] };
-  const realNow = Date.now;
-  Date.now = () => 3000 * 4 * 1000;  // start of a rotation cycle -> reading 0 (CPU temp)
-  const plugin = await load("sensors");
+  lcdFrame = readFileSync(join(framesDir, "54_126.rgb"));
+  const plugin = await load("face");
   plugin.Initialize();
   const frame = frameOf(plugin);
   writes.length = 0; plugin.Render();
   assert.equal(writes.length, 0, "second Render within 30 ms should be throttled");
-  Date.now = realNow;
 
   const tens = new Set([..."acdfg"].flatMap(seg).map(i => i + 21));
   const units = new Set([..."bcfg"].flatMap(seg));
