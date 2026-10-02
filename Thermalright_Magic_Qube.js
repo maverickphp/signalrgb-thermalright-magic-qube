@@ -1,3 +1,4 @@
+import LCD from "@SignalRGB/lcd";
 export function Name() { return "Thermalright Magic Qube"; }
 export function VendorId() { return 0x0416; }
 export function ProductId() { return 0x8001; }
@@ -190,6 +191,34 @@ function litMask(now) {
 	return lit;
 }
 
+// ---- LCD face (test) -------------------------------------------------------------------------
+// SignalRGB renders an LCD face (e.g. the built-in "Simple Sensor") over the effect into a
+// frame we can read. Test: color each LED from the matching spot of that frame.
+const LCD_SIZE = 240;
+let lcdFrame = null;
+let lastFrameGrab = 0;
+
+function grabLcdFrame(now) {
+	if (now - lastFrameGrab < 250) {
+		return;
+	}
+	lastFrameGrab = now;
+	try {
+		const frame = LCD.getFrame({ format: "RGB" });
+		lcdFrame = frame && frame.length === LCD_SIZE * LCD_SIZE * 3 ? frame : null;
+	} catch (e) {
+		lcdFrame = null;
+	}
+}
+
+function lcdColor(x, y) {
+	const [w, h] = Size();
+	const px = Math.min(LCD_SIZE - 1, Math.floor((x + 0.5) / w * LCD_SIZE));
+	const py = Math.min(LCD_SIZE - 1, Math.floor((y + 0.5) / h * LCD_SIZE));
+	const i = (py * LCD_SIZE + px) * 3;
+	return [lcdFrame[i], lcdFrame[i + 1], lcdFrame[i + 2]];
+}
+
 // ---- Device -----------------------------------------------------------------------------------
 
 let lastFrame = 0;
@@ -197,6 +226,11 @@ let lastFrame = 0;
 export function Initialize() {
 	device.setName("Thermalright Magic Qube");
 	readSensor = findSensorReader();
+	try {
+		LCD.initialize({ width: LCD_SIZE, height: LCD_SIZE });
+	} catch (e) {
+		device.log(`LCD.initialize failed: ${e}`);
+	}
 }
 
 export function Render() {
@@ -205,6 +239,7 @@ export function Render() {
 		return;
 	}
 	lastFrame = now;
+	grabLcdFrame(now);
 	sendColors(null, litMask(now));
 }
 
@@ -229,7 +264,7 @@ function sendColors(overrideColor, lit) {
 			continue;
 		}
 		const [x, y] = vLedPositions[i];
-		const color = fixed || device.color(x, y);
+		const color = fixed || (lcdFrame ? lcdColor(x, y) : device.color(x, y));
 		frame.push(
 			Math.floor(color[0] * scale),
 			Math.floor(color[1] * scale),

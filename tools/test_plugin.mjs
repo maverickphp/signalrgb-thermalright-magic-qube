@@ -13,7 +13,10 @@ Object.assign(globalThis, {
   showReadings: true, rotateSeconds: 3,
 });
 
-const src = readFileSync(new URL("../Thermalright_Magic_Qube.js", import.meta.url), "utf8");
+// The real @SignalRGB/lcd module only exists inside SignalRGB; stand in a frameless one.
+globalThis.LCD = { initialize() {}, getFrame() { return null; } };
+const src = readFileSync(new URL("../Thermalright_Magic_Qube.js", import.meta.url), "utf8")
+  .replace('import LCD from "@SignalRGB/lcd";', "const LCD = globalThis.LCD;");
 const load = async tag => import("data:text/javascript," + encodeURIComponent(src + `\n// ${tag}`));
 
 function frameOf(plugin) {
