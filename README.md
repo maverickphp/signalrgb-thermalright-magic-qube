@@ -1,5 +1,15 @@
 # SignalRGB plugin: Thermalright Magic Qube
 
+<p align="center">
+  <a href="https://www.thermalright.com/product/magic-qube-360-argb-black/"><img src="https://www.thermalright.com/wp-content/uploads/2026/08/magic-qube-360-argb-black-768x768.png" alt="Thermalright Magic Qube 360 ARGB, black" width="320"></a>
+  <a href="https://www.thermalright.com/product/magic-qube-360-argb-white/"><img src="https://www.thermalright.com/wp-content/uploads/2026/08/magic-qube-360-argb-white-768x768.png" alt="Thermalright Magic Qube 360 ARGB, white" width="320"></a>
+  <br>
+  <sub>Thermalright Magic Qube 360 ARGB in
+  <a href="https://www.thermalright.com/product/magic-qube-360-argb-black/">black</a> and
+  <a href="https://www.thermalright.com/product/magic-qube-360-argb-white/">white</a>.
+  Product images © Thermalright, linked from thermalright.com.</sub>
+</p>
+
 Lets [SignalRGB](https://signalrgb.com) drive the digital display on the pump head of the
 **Thermalright Magic Qube 360 ARGB** AIO: the two 7-segment digits, the corner labels, the border
 and the side light strip all follow your SignalRGB effect.
