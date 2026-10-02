@@ -1,69 +1,84 @@
 # SignalRGB plugin: Thermalright Magic Qube
 
-Lets [SignalRGB](https://signalrgb.com) drive the digital LED display on the pump head of the
-**Thermalright Magic Qube 360 ARGB** AIO. The display keeps showing live CPU/GPU readings like
-Thermalright's own software, but in the colors of your SignalRGB effect.
+Lets [SignalRGB](https://signalrgb.com) drive the digital display on the pump head of the
+**Thermalright Magic Qube 360 ARGB** AIO: the two 7-segment digits, the corner labels, the border
+and the side light strip all follow your SignalRGB effect.
 
-The radiator fans and the pump ring are plain 5V ARGB and are wired to the motherboard's ARGB
-header. Set those up as components on your motherboard's ARGB channel in SignalRGB. This project
-only covers the USB display (`VID 0416`, `PID 8001`, a WCH CH32x035 HID device).
+| Setup | Display shows |
+|---|---|
+| **Addon only** | Your effect on every segment, synced with the rest of your PC |
+| **Addon + optional helper** | Live CPU °C, GPU °C, GPU % and CPU % on the digits, in your effect's colors |
 
-## How it works
+Why the helper? Free SignalRGB doesn't give plugins CPU/GPU sensor readings (they're a
+[Pro feature](https://docs.signalrgb.com/guides/account-billing/about-pro-features.md)), so a
+small background program reads them and hands them to the plugin.
 
-SignalRGB doesn't give plugins access to temperatures, so the work is split in two:
-
-```text
-SignalRGB effect --UDP 127.0.0.1:51866--> helper --USB HID--> Magic Qube display
-                                            ^
-             LibreHardwareMonitorLib -------+  (CPU/GPU temperature and load)
-```
-
-- `Thermalright_Magic_Qube.js` is a SignalRGB network plugin. It sends the effect colors for all
-  66 LEDs to the helper on this PC.
-- `helper/magic_qube_helper.py` reads the sensors, lights only the digit segments that spell the
-  current value, and writes the frame to the display. It rotates through CPU temperature, GPU
-  temperature, GPU load and CPU load every 3 seconds. When SignalRGB isn't running it keeps
-  showing the readings in a fixed blue.
+The radiator fans and the pump ring are plain 5V ARGB wired to the motherboard's ARGB header.
+Set those up as components on your motherboard's ARGB channel in SignalRGB; this plugin covers
+the USB display (`VID 0416`, `PID 8001`).
 
 ## Install
 
-1. Quit Thermalright Control Center (`TRCC.exe`), including from the tray, and stop it starting
-   with Windows. It fights over the device.
-2. Download `LibreHardwareMonitor.zip` (not the .NET 10 build) from the
-   [LibreHardwareMonitor releases](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases)
-   and extract it. The helper only loads its `LibreHardwareMonitorLib.dll`; the app itself never runs.
-3. Set up the helper, from this repo's folder:
-
-   ```powershell
-   python -m venv .venv
-   .venv\Scripts\python -m pip install hidapi pythonnet
-   ```
-
-4. From an **elevated** PowerShell, register the helper to start hidden at logon (CPU temperatures
-   need admin rights):
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File helper\install_helper.ps1 -LhmPath "C:\path\to\LibreHardwareMonitor"
-   ```
-
-   It starts right away too. `-Uninstall` removes it. Its log is in
-   `%LOCALAPPDATA%\MagicQubeHelper\helper.log`.
-5. In SignalRGB's Addons page, add this repo as an addon. It updates automatically when the repo
-   changes:
+1. Quit Thermalright Control Center (`TRCC.exe`), including from the tray. It fights over the
+   display.
+2. In SignalRGB, open **Addons** and add this repo:
    `https://github.com/maverickphp/signalrgb-thermalright-magic-qube`
-6. Fully restart SignalRGB (quit it from the tray icon). The display shows up under Devices as
-   **Thermalright Magic Qube**.
+3. Quit SignalRGB from the tray icon and open it again. **Thermalright Magic Qube** shows up under
+   Devices and follows your effects.
+
+### Optional: show temperatures
+
+1. Download `MagicQubeHelper.zip` from the
+   [latest release](https://github.com/maverickphp/signalrgb-thermalright-magic-qube/releases/latest)
+   and extract it.
+2. Double-click **Install.cmd** and allow the admin prompt.
+
+That's it: within a few seconds the digits start showing your readings. The helper runs hidden in
+the background and starts with Windows. The installer also:
+
+- stops TRCC from starting with Windows,
+- offers to install the free [PawnIO](https://pawnio.eu) driver if it's missing (needed for CPU
+  temperature),
+- copies itself to `C:\Program Files\MagicQubeHelper`.
+
+To remove it, run **Uninstall.cmd** (also in that folder). The display goes back to effect-only.
 
 ## Settings
 
+In SignalRGB: Devices → Thermalright Magic Qube → Lighting.
+
 | Setting | What it does |
 |---|---|
+| Show CPU/GPU Readings | Spell the helper's readings on the digits; off shows the effect on every segment |
+| Seconds Per Reading | How long each reading stays before the next one (default 3) |
 | Lighting Mode | `Canvas` follows the active effect, `Forced` uses one color |
 | Forced Color | Color for `Forced` mode |
 | Shutdown Color | Color sent when SignalRGB or Windows shuts down |
-| Hardware Brightness (%) | Thermalright's own app sends colors at 40%; this matches it by default |
+| Hardware Brightness (%) | Thermalright's own app runs the LEDs at 40%; this matches it by default |
+| LCD Face Sensor / Text Color (Pro) | See below |
 
-## Protocol
+**SignalRGB Pro users** may not need the helper: the plugin also registers an LCD for the device,
+and can read the number SignalRGB's built-in **Simple Sensor** face draws on it. Pick that face in
+the device's LCD tab, set its text color to the plugin's *LCD Face Text Color* (default
+`#00ff00`), and pick the matching *LCD Face Sensor*. This is untested, since sensors and face
+selection are Pro features.
+
+## How it works
+
+```text
+                      effect colors
+SignalRGB ───────────────────────────────► plugin ──USB HID──► Magic Qube display
+                                             ▲
+helper (optional) ──UDP 127.0.0.1:51867──────┘
+  reads CPU/GPU sensors with LibreHardwareMonitorLib,
+  sends {"cpu_temp": 63.0, "gpu_temp": 45.0, "gpu_load": 23.0, "cpu_load": 12.5} once a second
+```
+
+The plugin always drives the display itself. While readings arrive it lights only the segments
+that spell the current value plus its corner label, border and strip; when they stop for 5 seconds
+it goes back to lighting every segment.
+
+### Display protocol
 
 Each frame is a 20-byte header followed by 66 RGB triplets, sent as 64-byte HID output reports
 (Windows needs report ID `0x00` in front of each one):
@@ -77,39 +92,44 @@ offset 20..  R G B x 66    colors in wire order
 
 No handshake is needed before sending colors.
 
-LED wire order:
-
 | LEDs | Part |
 |---|---|
 | 0-20 | right (units) digit, 7 segments x 3 LEDs, segment order c, d, e, g, b, a, f |
 | 21-41 | left (tens) digit, same order |
-| 42-49 | indicator pairs, clockwise from top-left: CPU temp, GPU temp, GPU load, CPU load |
+| 42-49 | corner label pairs, clockwise from top-left: CPU °C, GPU °C, GPU %, CPU % |
 | 50-64 | border outline |
 | 65 | light strip on the side of the pump head (not in the trcc-linux map; found by testing) |
 
-The order of LEDs inside each segment and around the border is approximate, so smooth gradients
-may look slightly out of order on those parts.
+## Development
 
-The plugin-to-helper packet is `4D 51 01` ("MQ", version 1) followed by the same 66 RGB triplets.
+- `tools/test_plugin.mjs`: runs the plugin against a fake SignalRGB runtime and checks the HID
+  frames it sends.
+- `tools/test_decoder.mjs`: checks the LCD-face number reader against frames from
+  `tools/make_face_frames.py`.
 
-## Tools
+  ```powershell
+  python tools/make_face_frames.py build/frames
+  node tools/test_plugin.mjs build/frames
+  node tools/test_decoder.mjs build/frames
+  ```
 
-`tools/` holds the scripts used to work out the protocol and to test the code:
-
-- `probe.py`: sends test frames straight to the display. Example: `python tools/probe.py walk`
-  lights the LEDs one at a time. Stop the helper first.
-- `hid_caps.py`: prints the device's HID report sizes.
-- `sensors_test.py`: lists the CPU/GPU sensors LibreHardwareMonitorLib finds.
-- `test_plugin.mjs`: runs the plugin against a fake SignalRGB runtime and checks the packets it
-  sends (`node tools/test_plugin.mjs`).
-- `test_helper.py`: checks the helper's digit masks (`python tools/test_helper.py`).
+- `tools/make_digit_templates.py`: regenerates the bold Arial digit templates the reader uses.
+- `tools/probe.py`: sends test frames straight to the display, e.g. `python tools/probe.py walk`
+  lights the LEDs one at a time (quit SignalRGB first). `hid_caps.py` prints the HID report sizes,
+  `sensors_test.py` lists the sensors LibreHardwareMonitorLib finds.
+- `helper/magic_qube_helper.py`: the helper. Run from source as administrator with
+  `--lhm <folder with LibreHardwareMonitorLib.dll>` (from `LibreHardwareMonitor.zip`, the
+  .NET Framework build).
+- `packaging/build.ps1 -LhmPath <that folder>`: builds `dist/MagicQubeHelper.zip` (the helper as
+  one exe, plus the install scripts) for a release.
 
 ## Credits
 
 Protocol and LED layout come from
 [thermalright-trcc-linux](https://github.com/Lexonight1/thermalright-trcc-linux), where
 [@jphilipb](https://github.com/jphilipb) mapped the Magic Qube on real hardware. Sensor readings
-come from [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).
+come from [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+(MPL-2.0), which the helper bundles.
 
 ## License
 
